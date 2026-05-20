@@ -1,3 +1,13 @@
+---
+title: Mci Model Mri
+emoji: 🧬
+colorFrom: purple
+colorTo: pink
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 Model_MRI
 =========
 

@@ -14,5 +14,5 @@ RUN pip install --no-cache-dir gunicorn
 COPY . /app
 
 ENV MODEL_PRETRAINED_PATH=/app/pretrained
-EXPOSE 5000
-CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:5000", "mri_api:app"]
+EXPOSE 7860
+CMD ["gunicorn", "-w", "1", "-b", "0.0.0.0:7860", "mri_api:app"]

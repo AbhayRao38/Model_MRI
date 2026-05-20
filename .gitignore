@@ -2,5 +2,5 @@ __pycache__/
 *.pyc
 .env
 .venv/
-pretrained/
+# Allow pretrained weights to be tracked via LFS
 aligned_outputs/

@@ -99,16 +99,71 @@ def predict_mri():
         initialize_models()
     if 'file' not in request.files or request.files['file'].filename == '':
         return jsonify({'success': False, 'error': 'No file provided'}), 400
+    
     image_file = request.files['file']
-    if ALLOWED_IMAGE_TYPES and (getattr(image_file, 'mimetype', '') or '').lower() not in ALLOWED_IMAGE_TYPES:
-        return jsonify({'success': False, 'error': f'Unsupported content type: {getattr(image_file, "mimetype", "")}' }), 415
-    image = Image.open(image_file.stream)
-    processed_image = preprocess_mri_image(np.array(image))
-    predictions = [model.predict(processed_image, verbose=0)[0] for model in mri_models]
-    ensemble_prediction = np.mean(predictions, axis=0)
-    mci_probability = float(np.clip(ensemble_prediction[-1], 0.0, 1.0)) if ensemble_prediction.size > 1 else float(np.clip(ensemble_prediction[0], 0.0, 1.0))
-    return jsonify({'success': True, 'probabilities': [1 - mci_probability, mci_probability], 'confidence': float(max(mci_probability, 1.0 - mci_probability)), 'mci_probability': mci_probability, 'predicted_class': int(mci_probability >= 0.5), 'model_info': {'model_type': 'Fallback Ensemble' if isinstance(mri_models[0], FallbackMRIModel) else 'Loaded Model', 'architecture': 'VGG16', 'num_models': len(mri_models), 'ensemble_std': float(np.std([pred[-1] if pred.size > 1 else pred[0] for pred in predictions])), 'individual_predictions': [float(pred[-1] if pred.size > 1 else pred[0]) for pred in predictions], 'model_weights': model_weights, 'weighted_ensemble': len(mri_models) > 1}})
+    filename = (getattr(image_file, 'filename', '') or '').lower()
+    mimetype = (getattr(image_file, 'mimetype', '') or '').lower()
+    
+    # Dual-mode validation (mimetype or extension fallback)
+    ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.tif'}
+    ext = os.path.splitext(filename)[1]
+    
+    is_dicom = filename.endswith('.dcm') or mimetype == 'application/dicom'
+    is_image = mimetype in ALLOWED_IMAGE_TYPES or ext in ALLOWED_EXTENSIONS
+    
+    if not (is_dicom or is_image):
+        return jsonify({'success': False, 'error': f'Unsupported file format: {filename or mimetype}'}), 415
+        
+    try:
+        if is_dicom:
+            try:
+                import pydicom
+            except ImportError:
+                return jsonify({'success': False, 'error': 'DICOM parsing library (pydicom) not installed on server'}), 500
+            
+            try:
+                ds = pydicom.dcmread(image_file.stream)
+                pixel_array = ds.pixel_array
+                if pixel_array.max() > pixel_array.min():
+                    pixel_array = ((pixel_array - pixel_array.min()) / (pixel_array.max() - pixel_array.min()) * 255.0).astype(np.uint8)
+                else:
+                    pixel_array = np.zeros(pixel_array.shape, dtype=np.uint8)
+                image = Image.fromarray(pixel_array).convert('RGB')
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'Corrupted or invalid DICOM file: {str(e)}'}), 400
+        else:
+            try:
+                with Image.open(image_file.stream) as img:
+                    image = img.convert('RGB')
+            except Exception as e:
+                return jsonify({'success': False, 'error': f'Corrupted or invalid image file: {str(e)}'}), 400
+        
+        processed_image = preprocess_mri_image(np.array(image))
+        predictions = [model.predict(processed_image, verbose=0)[0] for model in mri_models]
+        ensemble_prediction = np.mean(predictions, axis=0)
+        mci_probability = float(np.clip(ensemble_prediction[-1], 0.0, 1.0)) if ensemble_prediction.size > 1 else float(np.clip(ensemble_prediction[0], 0.0, 1.0))
+        
+        return jsonify({
+            'success': True,
+            'probabilities': [1 - mci_probability, mci_probability],
+            'confidence': float(max(mci_probability, 1.0 - mci_probability)),
+            'mci_probability': mci_probability,
+            'predicted_class': int(mci_probability >= 0.5),
+            'model_info': {
+                'model_type': 'Fallback Ensemble' if isinstance(mri_models[0], FallbackMRIModel) else 'Loaded Model',
+                'architecture': 'VGG16',
+                'num_models': len(mri_models),
+                'ensemble_std': float(np.std([pred[-1] if pred.size > 1 else pred[0] for pred in predictions])),
+                'individual_predictions': [float(pred[-1] if pred.size > 1 else pred[0]) for pred in predictions],
+                'model_weights': model_weights,
+                'weighted_ensemble': len(mri_models) > 1
+            }
+        })
+    except Exception as e:
+        logging.error(f"MRI prediction failed: {e}")
+        return jsonify({'success': False, 'error': f'Internal prediction error: {str(e)}'}), 500
 
 
 if __name__ == '__main__':
     app.run(host=os.environ.get('MRI_API_HOST', CFG['modalities']['mri']['api']['host']), port=int(os.environ.get('MRI_API_PORT', CFG['modalities']['mri']['api']['port'])), debug=False)
+
